@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MALORANT</title>
+    <style>
+        * { box-sizing: border-box; }
+        html, body { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; background: #000; font-family: monospace; user-select: none; }
+        canvas { display: block; width: 100vw !important; height: 100vh !important; }
+        
+        #hud { position: absolute; bottom: 25px; left: 25px; color: #ff4655; font-size: 24px; font-weight: bold; text-shadow: 2px 2px #000; display: none; z-index: 10; }
+        #weapon-hud { position: absolute; bottom: 25px; right: 25px; color: #ff4655; font-size: 26px; font-weight: bold; text-shadow: 2px 2px #000; display: none; z-index: 10; text-align: right; }
+        
+        #crosshair { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 12px; height: 12px; pointer-events: none; display: none; z-index: 10; }
+        .ch { position: absolute; background: #00ffaa; }
+
+        #killfeed { position: absolute; top: 20px; right: 20px; display: none; flex-direction: column; align-items: flex-end; z-index: 30; pointer-events: none; }
+        .kill-entry { background: rgba(15, 25, 35, 0.9); border-left: 5px solid #ff4655; color: #fff; padding: 8px 14px; margin-bottom: 6px; font-size: 18px; font-weight: bold; font-family: Impact, sans-serif; letter-spacing: 1.5px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); animation: fadeInOut 3s forwards; }
+        @keyframes fadeInOut { 0% { opacity: 0; transform: translateY(-10px); } 15% { opacity: 1; transform: translateY(0); } 85% { opacity: 1; } 100% { opacity: 0; transform: scale(0.95); } }
+
+        #scope-overlay { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; pointer-events: none; display: none; z-index: 20; }
+        .scope-line-h { position: absolute; top: 50%; left: 0; width: 100%; height: 2px; background: rgba(0,0,0,0.85); transform: translateY(-50%); }
+        .scope-line-v { position: absolute; left: 50%; top: 0; height: 100%; width: 2px; background: rgba(0,0,0,0.85); transform: translateX(-50%); }
+        .scope-dot { position: absolute; top: 50%; left: 50%; width: 6px; height: 6px; background: #ff4655; transform: translate(-50%, -50%); border-radius: 50%; }
+
+        #overlay { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; background: #0f1923; display: flex; flex-direction: column; justify-content: center; align-items: center; color: #fff; z-index: 100; cursor: pointer; text-align: center; }
+        #overlay h1 { color: #ff4655; font-family: Impact, sans-serif; font-size: 64px; margin-bottom: 10px; letter-spacing: 4px; }
+        #overlay p { font-size: 18px; color: #ece8e1; margin: 6px 0; }
+        .btn-play { margin-top: 20px; padding: 14px 35px; background: #ff4655; color: #fff; font-weight: bold; border: none; font-size: 20px; cursor: pointer; border-radius: 4px; }
+    </style>
+</head>
+<body>
+    <div id="overlay">
+        <h1>MALORANT</h1>
+        <p>[ OYUNU BAŞLATMAK İÇİN TIKLAYIN ]</p>
+        <p>WASD: Hareket | MOUSE: Bakış | SOL TIK: Ateş | SAĞ TIK: Operator Dürbün</p>
+        <p>SCROLL / 1-4: Silah Değiştirme | R: Sonsuz Şarjör</p>
+        <p>1: Vandal | 2: Classic | 3: Tactical Knife | 4: Operator</p>
+        <button class="btn-play">OYNA</button>
+    </div>
+
+    <div id="crosshair">
+        <div class="ch" style="top:5px; left:0; width:12px; height:2px;"></div>
+        <div class="ch" style="top:0; left:5px; width:2px; height:12px;"></div>
+    </div>
+
+    <div id="killfeed"></div>
+
+    <div id="scope-overlay">
+        <div class="scope-line-h"></div>
+        <div class="scope-line-v"></div>
+        <div class="scope-dot"></div>
+    </div>
+
+    <div id="hud">HP: <span id="hp">100</span> | ARMOR: <span id="armor">100</span></div>
+    <div id="weapon-hud"><div id="wep-name">VANDAL</div><div><span id="ammo">25</span> / MAX <span id="max-ammo">25</span></div></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        let prevT = performance.now();
+        let scene, camera, renderer;
+        let moveF = false, moveB = false, moveL = false, moveR = false;
+        let hp = 100, armor = 100;
+        
+        const weaponKeys = ['vandal', 'classic', 'knife', 'operator'];
+        let weapons = {
+            vandal: { name: "VANDAL", ammo: 25, maxAmmo: 25, dmg: 40, auto: true, delay: 100 },
+            classic: { name: "CLASSIC", ammo: 12, maxAmmo: 12, dmg: 26, auto: false, delay: 180 },
+            knife: { name: "TACTICAL KNIFE", ammo: 0, maxAmmo: 0, dmg: 50, auto: false, delay: 400 },
+            operator: { name: "OPERATOR", ammo: 5, maxAmmo: 5, dmg: 150, auto: false, delay: 1000 }
+        };
+        let currentWep = 'vandal';
+        let lastShootTime = 0;
+        let isMouseDown = false;
+        let isScoped = false;
+        
+        let bots = [];
+        let raycaster = new THREE.Raycaster();
+        let isStarted = false;
+        let pitch = 0, yaw = 0;
+        
+        let weaponContainer;
+        let weaponMeshes = {};
+
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        
+        function playShootSound(type) {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+
+            if(type === 'vandal') {
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(180, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(30, audioCtx.currentTime + 0.12);
+                gain.gain.setValueAtTime(0.4, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.12);
+                osc.start(); osc.stop(audioCtx.currentTime + 0.12);
+            } else if(type === 'operator') {
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(90, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(20, audioCtx.currentTime + 0.35);
+                gain.gain.setValueAtTime(0.7, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.35);
+                osc.start(); osc.stop(audioCtx.currentTime + 0.35);
+            } else if(type === 'classic') {
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(240, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(50, audioCtx.currentTime + 0.09);
+                gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.09);
+                osc.start(); osc.stop(audioCtx.currentTime + 0.09);
+            }
+        }
+
+        // VALORANT TARZI GERÇEKÇİ VURUŞ SESLERİ
+        function playHitSound(isHeadshot) {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+
+            if(isHeadshot) {
+                // Kafadan Vuruş: İkonik Valorant "Ding" Sesi (Yüksek Tınılı Çan)
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(1200, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(600, audioCtx.currentTime + 0.15);
+                gain.gain.setValueAtTime(0.5, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.15);
+                osc.start(); osc.stop(audioCtx.currentTime + 0.15);
+            } else {
+                // Gövde Vuruşu: Tok Metalik Darbe
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(320, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(120, audioCtx.currentTime + 0.08);
+                gain.gain.setValueAtTime(0.35, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.08);
+                osc.start(); osc.stop(audioCtx.currentTime + 0.08);
+            }
+        }
+
+        // VALORANT KILL SESİ (Öldürme Tınısı)
+        function playKillSound() {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            
+            // Çift Katmanlı İkonik Kill Sesi (Akortlu Melodi)
+            [523.25, 1046.50].forEach((freq, index) => {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(freq * 1.5, audioCtx.currentTime + 0.25);
+                
+                gain.gain.setValueAtTime(index === 0 ? 0.4 : 0.2, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.3);
+                
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.3);
+            });
+        }
+
+        init();
+        animate();
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x1a232a);
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 1.7, 5);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            document.body.appendChild(renderer.domElement);
+
+            scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+            const light = new THREE.DirectionalLight(0xffffff, 0.9);
+            light.position.set(10, 30, 20);
+            scene.add(light);
+
+            const floorMat = new THREE.MeshStandardMaterial({ color: 0x2f363d, roughness: 0.4 });
+            const floor = new THREE.Mesh(new THREE.PlaneGeometry(150, 150), floorMat);
+            floor.rotation.x = -Math.PI / 2;
+            scene.add(floor);
+
+            const wallMat = new THREE.MeshStandardMaterial({ color: 0x0f1923, roughness: 0.6 });
+            const borderMat = new THREE.MeshStandardMaterial({ color: 0xff4655, roughness: 0.3 });
+            const pillarMat = new THREE.MeshStandardMaterial({ color: 0x3a4046, roughness: 0.5 });
+
+            createBox(-15, 6, -10, 1, 12, 50, wallMat);
+            createBox(15, 6, -10, 1, 12, 50, wallMat);
+            createBox(0, 6, -30, 31, 12, 1, wallMat);
+            createBox(0, 6, 12, 31, 12, 1, wallMat);
+
+            createBox(-8, 3, -2, 1, 6, 1, pillarMat);
+            createBox(8, 3, -2, 1, 6, 1, pillarMat);
+            createBox(0, 0.2, -2, 16, 0.4, 0.2, borderMat);
+
+            weaponContainer = new THREE.Group();
+            camera.add(weaponContainer);
+            scene.add(camera);
+
+            build3DWeapons();
+
+            for(let i=0; i<4; i++) spawnBot();
+
+            const overlay = document.getElementById('overlay');
+            overlay.addEventListener('click', () => document.body.requestPointerLock());
+
+            document.addEventListener('pointerlockchange', () => {
+                if (document.pointerLockElement === document.body) {
+                    overlay.style.display = 'none';
+                    if(!isScoped) document.getElementById('crosshair').style.display = 'block';
+                    document.getElementById('hud').style.display = 'block';
+                    document.getElementById('weapon-hud').style.display = 'block';
+                    document.getElementById('killfeed').style.display = 'flex';
+                    isStarted = true;
+                } else {
+                    if(isStarted) overlay.style.display = 'flex';
+                }
+            });
+
+            document.addEventListener('keydown', e => {
+                if(!isStarted) return;
+                if(e.code === 'KeyW') moveF = true;
+                if(e.code === 'KeyS') moveB = true;
+                if(e.code === 'KeyA') moveL = true;
+                if(e.code === 'KeyD') moveR = true;
+                if(e.code === 'KeyR') reloadWeapon();
+                if(e.code === 'Digit1') switchWep('vandal');
+                if(e.code === 'Digit2') switchWep('classic');
+                if(e.code === 'Digit3') switchWep('knife');
+                if(e.code === 'Digit4') switchWep('operator');
+            });
+
+            document.addEventListener('keyup', e => {
+                if(e.code === 'KeyW') moveF = false;
+                if(e.code === 'KeyS') moveB = false;
+                if(e.code === 'KeyA') moveL = false;
+                if(e.code === 'KeyD') moveR = false;
+            });
+
+            document.addEventListener('mousedown', e => {
+                if(document.pointerLockElement !== document.body) return;
+                if(e.button === 0) {
+                    isMouseDown = true;
+                    shoot();
+                } else if(e.button === 2) {
+                    if(currentWep === 'operator') toggleScope();
+                }
+            });
+
+            document.addEventListener('mouseup', () => { isMouseDown = false; });
+            document.addEventListener('contextmenu', e => e.preventDefault());
+
+            document.addEventListener('wheel', e => {
+                if(!isStarted) return;
+                let idx = weaponKeys.indexOf(currentWep);
+                if(e.deltaY > 0) idx = (idx + 1) % weaponKeys.length;
+                else idx = (idx - 1 + weaponKeys.length) % weaponKeys.length;
+                switchWep(weaponKeys[idx]);
+            });
+
+            document.addEventListener('mousemove', e => {
+                if (document.pointerLockElement !== document.body) return;
+                yaw -= e.movementX * 0.0022;
+                pitch -= e.movementY * 0.0022;
+                pitch = Math.max(-Math.PI / 2.2, Math.min(Math.PI / 2.2, pitch));
+
+                camera.rotation.set(0, 0, 0);
+                camera.rotateY(yaw);
+                camera.rotateX(pitch);
+            });
+
+            window.addEventListener('resize', onWindowResize);
+            switchWep('vandal');
+        }
+
+        function createBox(x,y,z,w,h,d, mat) {
+            const mesh = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), mat);
+            mesh.position.set(x,y,z);
+            scene.add(mesh);
+        }
+
+        function build3DWeapons() {
+            const darkMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.3 });
+            const metalMat = new THREE.MeshStandardMaterial({ color: 0x333333, metalness: 0.8, roughness: 0.2 });
+            const woodMat = new THREE.MeshStandardMaterial({ color: 0x5c3a21, roughness: 0.7 });
+            const knifeMat = new THREE.MeshStandardMaterial({ color: 0xcccccc, metalness: 0.9, roughness: 0.1 });
+
+            const vandalGroup = new THREE.Group();
+            const vBody = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.12, 0.6), darkMat);
+            const vBarrel = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.4), metalMat);
+            vBarrel.rotation.x = Math.PI / 2;
+            vBarrel.position.set(0, 0.02, -0.45);
+            const vMag = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.25, 0.1), woodMat);
+            vMag.position.set(0, -0.15, -0.1);
+            vMag.rotation.x = -0.3;
+            vandalGroup.add(vBody, vBarrel, vMag);
+            vandalGroup.position.set(0.25, -0.22, -0.5);
+
+            const classicGroup = new THREE.Group();
+            const cSlide = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.08, 0.3), metalMat);
+            const cGrip = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.15, 0.08), darkMat);
+            cGrip.position.set(0, -0.09, 0.08);
+            cGrip.rotation.x = 0.2;
+            classicGroup.add(cSlide, cGrip);
+            classicGroup.position.set(0.22, -0.2, -0.4);
+
+            const knifeGroup = new THREE.Group();
+            const kBlade = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.08, 0.35), knifeMat);
+            kBlade.position.set(0, 0.04, -0.2);
+            const kHandle = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.06, 0.18), darkMat);
+            knifeGroup.add(kBlade, kHandle);
+            knifeGroup.position.set(0.2, -0.22, -0.4);
+
+            const opGroup = new THREE.Group();
+            const opBody = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.14, 0.8), darkMat);
+            const opBarrel = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.6), metalMat);
+            opBarrel.rotation.x = Math.PI / 2;
+            opBarrel.position.set(0, 0.03, -0.65);
+            const opScope = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.25), metalMat);
+            opScope.rotation.x = Math.PI / 2;
+            opScope.position.set(0, 0.1, -0.2);
+            opGroup.add(opBody, opBarrel, opScope);
+            opGroup.position.set(0.28, -0.25, -0.6);
+
+            weaponMeshes = { vandal: vandalGroup, classic: classicGroup, knife: knifeGroup, operator: opGroup };
+
+            Object.values(weaponMeshes).forEach(mesh => {
+                mesh.visible = false;
+                weaponContainer.add(mesh);
+            });
+        }
+
+        function spawnBot() {
+            const botGroup = new THREE.Group();
+            
+            const redMat = new THREE.MeshStandardMaterial({ color: 0xff4655, roughness: 0.3 });
+            const darkMat = new THREE.MeshStandardMaterial({ color: 0x1f2326, roughness: 0.5 });
+            const skinMat = new THREE.MeshStandardMaterial({ color: 0xffdbac, roughness: 0.5 });
+
+            const head = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.4, 0.4), skinMat);
+            head.position.y = 1.6;
+            head.userData = { isHead: true };
+            botGroup.add(head);
+
+            const torso = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.8, 0.4), redMat);
+            torso.position.y = 1.0;
+            botGroup.add(torso);
+
+            const armL = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.7, 0.2), redMat);
+            armL.position.set(-0.48, 0.95, 0);
+            botGroup.add(armL);
+
+            const armR = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.7, 0.2), redMat);
+            armR.position.set(0.48, 0.95, 0);
+            botGroup.add(armR);
+
+            const legL = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.7, 0.3), darkMat);
+            legL.position.set(-0.2, 0.35, 0);
+            botGroup.add(legL);
+
+            const legR = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.7, 0.3), darkMat);
+            legR.position.set(0.2, 0.35, 0);
+            botGroup.add(legR);
+
+            const spawnX = (Math.random() - 0.5) * 20;
+            const spawnZ = -10 - Math.random() * 12;
+            botGroup.position.set(spawnX, 0, spawnZ);
+
+            botGroup.userData = { 
+                hp: 100, 
+                dir: Math.random() < 0.5 ? 1 : -1,
+                minX: spawnX - 4,
+                maxX: spawnX + 4
+            };
+            
+            scene.add(botGroup);
+            bots.push(botGroup);
+        }
+
+        function createBloodEffect(pos) {
+            const bloodGeo = new THREE.SphereGeometry(0.08, 6, 6);
+            const bloodMat = new THREE.MeshBasicMaterial({ color: 0xcc0000 });
+            const blood = new THREE.Mesh(bloodGeo, bloodMat);
+            blood.position.copy(pos);
+            scene.add(blood);
+
+            setTimeout(() => {
+                scene.remove(blood);
+                bloodGeo.dispose();
+                bloodMat.dispose();
+            }, 300);
+        }
+
+        function addKillfeed(weaponName, isHeadshot) {
+            const feed = document.getElementById('killfeed');
+            const entry = document.createElement('div');
+            entry.className = 'kill-entry';
+            entry.innerHTML = `PLAYER [${weaponName}] ${isHeadshot ? '🎯 HEADSHOT' : '💀 BOT'}`;
+            feed.appendChild(entry);
+
+            setTimeout(() => {
+                entry.remove();
+            }, 3000);
+        }
+
+        function switchWep(key) {
+            if(isScoped) toggleScope();
+            currentWep = key;
+
+            Object.keys(weaponMeshes).forEach(k => {
+                weaponMeshes[k].visible = (k === key);
+            });
+
+            if(weaponMeshes[key]) {
+                weaponMeshes[key].position.y = -0.5;
+                setTimeout(() => {
+                    weaponMeshes[key].position.y = (key === 'operator') ? -0.25 : -0.22;
+                }, 100);
+            }
+
+            updateHUD();
+        }
+
+        function toggleScope() {
+            isScoped = !isScoped;
+            camera.fov = isScoped ? 22 : 75;
+            camera.updateProjectionMatrix();
+
+            document.getElementById('crosshair').style.display = isScoped ? 'none' : 'block';
+            document.getElementById('scope-overlay').style.display = isScoped ? 'block' : 'none';
+
+            if(weaponMeshes.operator) weaponMeshes.operator.visible = !isScoped;
+        }
+
+        function reloadWeapon() {
+            if(currentWep === 'knife') return;
+            let w = weapons[currentWep];
+            w.ammo = w.maxAmmo;
+            updateHUD();
+        }
+
+        function createBulletTracer(startPos, endPos) {
+            const material = new THREE.LineBasicMaterial({ color: 0xffea00, linewidth: 2, transparent: true, opacity: 0.8 });
+            const points = [startPos, endPos];
+            const geometry = new THREE.BufferGeometry().setFromPoints(points);
+            const line = new THREE.Line(geometry, material);
+            scene.add(line);
+
+            setTimeout(() => {
+                scene.remove(line);
+                geometry.dispose();
+                material.dispose();
+            }, 60);
+        }
+
+        function shoot() {
+            const now = performance.now();
+            let w = weapons[currentWep];
+
+            if (currentWep === 'knife') {
+                if (now - lastShootTime < w.delay) return;
+                lastShootTime = now;
+                weaponMeshes.knife.rotation.x = -0.5;
+                setTimeout(() => { weaponMeshes.knife.rotation.x = 0; }, 150);
+
+                raycaster.setFromCamera(new THREE.Vector2(0,0), camera);
+                let targetMeshes = [];
+                bots.forEach(b => { b.children.forEach(c => { c.userData.parentBot = b; targetMeshes.push(c); }); });
+                let hits = raycaster.intersectObjects(targetMeshes);
+                if(hits.length > 0 && hits[0].distance < 3) {
+                    let hitBotGroup = hits[0].object.userData.parentBot;
+                    hitBotGroup.userData.hp -= w.dmg;
+                    playHitSound(false);
+                    createBloodEffect(hits[0].point);
+                    if(hitBotGroup.userData.hp <= 0) {
+                        scene.remove(hitBotGroup);
+                        bots = bots.filter(b => b !== hitBotGroup);
+                        playKillSound();
+                        addKillfeed(w.name, false);
+                        setTimeout(spawnBot, 1500);
+                    }
+                }
+                return;
+            }
+
+            if (now - lastShootTime < w.delay) return;
+            if (w.ammo <= 0) return;
+            
+            lastShootTime = now;
+            w.ammo--;
+            
+            playShootSound(currentWep);
+
+            if(weaponMeshes[currentWep]) {
+                weaponMeshes[currentWep].position.z += 0.08;
+                camera.rotation.x += 0.01;
+                setTimeout(() => { 
+                    if(weaponMeshes[currentWep]) weaponMeshes[currentWep].position.z -= 0.08;
+                }, 60);
+            }
+
+            updateHUD();
+
+            raycaster.setFromCamera(new THREE.Vector2(0,0), camera);
+            let targetMeshes = [];
+            bots.forEach(b => {
+                b.children.forEach(c => {
+                    c.userData.parentBot = b;
+                    targetMeshes.push(c);
+                });
+            });
+
+            let muzzlePos = camera.position.clone();
+            let gunOffset = new THREE.Vector3(0.2, -0.2, -0.5).applyQuaternion(camera.quaternion);
+            muzzlePos.add(gunOffset);
+
+            let hits = raycaster.intersectObjects(targetMeshes);
+            let hitEndPos;
+
+            if(hits.length > 0) {
+                let hitMesh = hits[0].object;
+                let hitBotGroup = hitMesh.userData.parentBot;
+                hitEndPos = hits[0].point;
+
+                let isHeadshot = hitMesh.userData.isHead || false;
+                let damage = isHeadshot ? w.dmg * 4 : w.dmg;
+
+                playHitSound(isHeadshot);
+                createBloodEffect(hits[0].point);
+
+                hitBotGroup.userData.hp -= damage;
+
+                if(hitBotGroup.userData.hp <= 0) {
+                    scene.remove(hitBotGroup);
+                    bots = bots.filter(b => b !== hitBotGroup);
+                    
+                    playKillSound();
+                    addKillfeed(w.name, isHeadshot);
+
+                    updateHUD();
+                    setTimeout(spawnBot, 1500);
+                }
+            } else {
+                let targetDir = camera.getWorldDirection(new THREE.Vector3());
+                hitEndPos = muzzlePos.clone().add(targetDir.multiplyScalar(50));
+            }
+
+            createBulletTracer(muzzlePos, hitEndPos);
+        }
+
+        function updateHUD() {
+            let w = weapons[currentWep];
+            document.getElementById('hp').innerText = hp;
+            document.getElementById('armor').innerText = armor;
+            document.getElementById('wep-name').innerText = w.name;
+            document.getElementById('ammo').innerText = currentWep == 'knife' ? '--' : w.ammo;
+            document.getElementById('max-ammo').innerText = currentWep == 'knife' ? '--' : w.maxAmmo;
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            let now = performance.now();
+            let delta = (now - prevT) / 1000;
+            prevT = now;
+
+            if (document.pointerLockElement === document.body) {
+                if (isMouseDown && weapons[currentWep].auto) {
+                    shoot();
+                }
+
+                let speed = 6.5;
+                let dir = new THREE.Vector3();
+                if(moveF) dir.z -= 1;
+                if(moveB) dir.z += 1;
+                if(moveL) dir.x -= 1;
+                if(moveR) dir.x += 1;
+                dir.normalize();
+                dir.applyAxisAngle(new THREE.Vector3(0,1,0), yaw);
+
+                camera.position.addScaledVector(dir, speed * delta);
+                
+                if (camera.position.z < -2) camera.position.z = -2;
+                if (camera.position.z > 10) camera.position.z = 10;
+                camera.position.y = 1.7;
+
+                bots.forEach(b => {
+                    b.position.x += b.userData.dir * 0.04;
+                    if(b.position.x > b.userData.maxX) b.userData.dir = -1;
+                    if(b.position.x < b.userData.minX) b.userData.dir = 1;
+                });
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+    </script>
+</body>
+</html>
